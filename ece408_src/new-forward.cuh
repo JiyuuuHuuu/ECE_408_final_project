@@ -32,9 +32,10 @@ __global__ void forward_kernel(float *y, const float *x, const float *k, const i
         W_grid++;
 
     // int b = blockIdx.z;
-    int m = blockIdx.x;
-    int h = blockIdx.y/W_grid*TILE_WIDTH + threadIdx.y;
-    int w = (blockIdx.y%W_grid)*TILE_WIDTH + threadIdx.x;
+    int b = blockIdx.x;
+    int m = blockIdx.y;
+    int h = blockIdx.z/W_grid*TILE_WIDTH + threadIdx.y;
+    int w = blockIdx.z%W_grid*TILE_WIDTH + threadIdx.x;
     // (void)H_out; // silence declared but never referenced warning. remove this line when you start working
     // (void)W_out; // silence declared but never referenced warning. remove this line when you start working
 
@@ -47,8 +48,8 @@ __global__ void forward_kernel(float *y, const float *x, const float *k, const i
 
     if (h < H_out && w < W_out)
     {
-        for (int b = 0; b < B; b++)
-        {
+//        for (int b = 0; b < B; b++)
+//        {
             float acc = 0;
             for (int c = 0; c < C; c++)
             {
@@ -62,7 +63,7 @@ __global__ void forward_kernel(float *y, const float *x, const float *k, const i
                 }
             }
             y4d(b, m, h, w) = acc;
-        }
+//        }
     }
 
 
@@ -102,10 +103,10 @@ void forward<gpu, float>(mshadow::Tensor<gpu, 4, float> &y, const mshadow::Tenso
     int H_grid = ceil(H_out/(float)TILE_WIDTH);
     // if (H_out%TILE_WIDTH != 0)
     //     H_grid++;
-    int Y = H_grid*W_grid;
+    int Z = H_grid*W_grid;
 
     dim3 blockDim(TILE_WIDTH, TILE_WIDTH, 1);
-    dim3 gridDim(M, Y, 1);
+    dim3 gridDim(B, M, Z);
     // dim3 gridDim(0);
     // dim3 blockDim(0);
 
