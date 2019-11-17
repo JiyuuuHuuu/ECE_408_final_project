@@ -3,11 +3,11 @@
 #define MXNET_OPERATOR_NEW_FORWARD_CUH_
 #include <math.h>
 #define TILE_WIDTH 16
-
+#define CUDA_MAX_NUM_THREADS 1024
 
 #include <mxnet/base.h>
 #include <stdio.h>
-
+#include <cublasLt.h>
 namespace mxnet
 {
 namespace op
@@ -72,6 +72,51 @@ __global__ void forward_kernel(float *y, const float *x, const float *k, const i
 #undef k4d
 }
 
+//__global__ void unroll_Kernel(int C, int H, int W, int K, float* X, float* X_unroll){
+//    int c, s, h_out, w_out, h_unroll, w_base, p, q;
+//    int t = blockId.x * CUDA_MAX_NUM_THREADS + threadId.x;
+//    int H_out = H - K + 1;
+//    int W_out = W - K + 1;
+//    int W_unroll = H_out * W_out;
+//#define x4d(i3, i2, i1, i0) X[(i3) * (C * H * W) + (i2) * (H * W) + (i1) * (W) + i0]
+//    if(t < C * W_unroll){
+//        c = t / W_unroll;
+//        s = t % W_unroll;
+//        h_out = s / W_out;
+//        w_out = s % W_out;
+//        h_unroll = h_out * W_out + w_out;
+//        w_base = c * K * K;
+//        for(p = 0; p < K; p++){
+//            for(q = 0; q < K; q++){
+//                w_unroll = w_base + p * K + q;
+//                X_unroll[h_unroll * W_unroll + w_unroll] = x4d(c, h_out + p, w_out + q);
+//            }
+//        }
+//    }
+//#undef x4d
+//}
+
+void unroll(int C, int H, int W, int K, int b, float* X, float* X_unroll){
+    int c, h, w, p, q, w_base, w_unroll, h_unroll;
+    int H_out = H - K + 1;
+    int W_out = W - K + 1;
+    #define x4d(i3, i2, i1, i0) X[(i3) * (C * H * W) + (i2) * (H * W) + (i1) * (W) + i0]
+    for(c = 0; c < C; c++) {
+        w_base = c * (K*K);
+        for(p = 0; p < K; p++){
+            for(q = 0; q < K; q++) {
+                for (h = 0; h < H_out; h++) {
+                    for (w = 0; w < W_out; w++) {
+                        w_unroll = w_base + p * K + q;
+                        h_unroll = h * W_out + w;
+                        X_unroll[h_unroll * C * K * K + w_unroll] = x4d(b, c, h + p, w + q);
+                    }
+                }
+            }
+        }
+    }
+    #undef x4d
+}
 /*
    This function is called by new-inl.h
    Any code you write should be executed by this function.
@@ -96,25 +141,32 @@ void forward<gpu, float>(mshadow::Tensor<gpu, 4, float> &y, const mshadow::Tenso
     const int H_out = H - K + 1;
     const int W_out = W - K + 1;
 
-    // Set the kernel dimensions
-    int W_grid = ceil(W_out/(float)TILE_WIDTH);
-    // if (W_out%TILE_WIDTH != 0)
-    //     W_grid++;
-    int H_grid = ceil(H_out/(float)TILE_WIDTH);
-    // if (H_out%TILE_WIDTH != 0)
-    //     H_grid++;
-    int Z = H_grid*W_grid;
-
-    dim3 blockDim(TILE_WIDTH, TILE_WIDTH, 1);
-    dim3 gridDim(B, M, Z);
-    // dim3 gridDim(0);
-    // dim3 blockDim(0);
-
-    // Call the kernel
-    forward_kernel<<<gridDim, blockDim>>>(y.dptr_,x.dptr_,w.dptr_, B,M,C,H,W,K);
-    // printf("%d", W_out);
-    // Use MSHADOW_CUDA_CALL to check for CUDA runtime errors.
-    MSHADOW_CUDA_CALL(cudaDeviceSynchronize());
+    int W_unroll = C * K * K;
+    int H_unroll = H_out * W_out;
+    float* X_unrolled = (float*) malloc(W_unroll * H_unroll * sizeof(float));
+    for (int b=0; b < B; b++) {
+        unroll(C, H, W, K, b, x, X_unrolled);
+//        gemm(H_unroll, M, W_unroll, X_unrolled, W, Y[n]);
+    }
+//    // Set the kernel dimensions
+//    int W_grid = ceil(W_out/(float)TILE_WIDTH);
+//    // if (W_out%TILE_WIDTH != 0)
+//    //     W_grid++;
+//    int H_grid = ceil(H_out/(float)TILE_WIDTH);
+//    // if (H_out%TILE_WIDTH != 0)
+//    //     H_grid++;
+//    int Z = H_grid*W_grid;
+//
+//    dim3 blockDim(TILE_WIDTH, TILE_WIDTH, 1);
+//    dim3 gridDim(B, M, Z);
+//    // dim3 gridDim(0);
+//    // dim3 blockDim(0);
+//
+//    // Call the kernel
+//    forward_kernel<<<gridDim, blockDim>>>(y.dptr_,x.dptr_,w.dptr_, B,M,C,H,W,K);
+//    // printf("%d", W_out);
+//    // Use MSHADOW_CUDA_CALL to check for CUDA runtime errors.
+//    MSHADOW_CUDA_CALL(cudaDeviceSynchronize());
 
 }
 
