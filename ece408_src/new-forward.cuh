@@ -76,6 +76,7 @@ namespace mxnet
             dim3 blockDim(CUDA_MAX_NUM_THREADS, 1, 1); // FIXME: get cuda_max_num_thread from device query
             dim3 gridDim(ceil(C * H_out * W_out / (float) CUDA_MAX_NUM_THREADS), B, 1);
             unroll_Kernel<<<gridDim, blockDim>>>(C, H, W, K, x.dptr_, X_unroll);
+            
             // Set the kernel dimensions
 //            int W_grid = ceil(W_out/(float)TILE_WIDTH);
 //            int H_grid = ceil(H_out/(float)TILE_WIDTH);
