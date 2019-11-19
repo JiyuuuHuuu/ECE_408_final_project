@@ -12,7 +12,6 @@ namespace mxnet
 {
     namespace op
     {
-
         __global__ void forward_kernel(float *y, const float *x, const float *k, const int B, const int M, const int C, const int H, const int W, const int K)
         {
 
@@ -72,53 +71,39 @@ namespace mxnet
 #undef k4d
         }
 
-
-
-//__global__ void unroll_Kernel(int C, int H, int W, int K, float* X, float* X_unroll){
-//    int c, s, h_out, w_out, h_unroll, w_base, p, q;
-//    int t = blockId.x * CUDA_MAX_NUM_THREADS + threadId.x;
-//    int H_out = H - K + 1;
-//    int W_out = W - K + 1;
-//    int W_unroll = H_out * W_out;
-//#define x4d(i3, i2, i1, i0) X[(i3) * (C * H * W) + (i2) * (H * W) + (i1) * (W) + i0]
-//    if(t < C * W_unroll){
-//        c = t / W_unroll;
-//        s = t % W_unroll;
-//        h_out = s / W_out;
-//        w_out = s % W_out;
-//        h_unroll = h_out * W_out + w_out;
-//        w_base = c * K * K;
-//        for(p = 0; p < K; p++){
-//            for(q = 0; q < K; q++){
-//                w_unroll = w_base + p * K + q;
-//                X_unroll[h_unroll * W_unroll + w_unroll] = x4d(c, h_out + p, w_out + q);
-//            }
+//        __global__ void unroll_Kernel(int K, float* W, float* W_unroll){
+//            int c = blockIdx.x;
+//            int
 //        }
-//    }
-//#undef x4d
-//}
 
-        void unroll(int C, int H, int W, int K, int b, float* X, float* X_unroll){
-            int c, h, w, p, q, w_base, w_unroll, h_unroll;
+        __global__ void unroll_Kernel(int C, int H, int W, int K, float* X, float* X_unroll){
+            int c, s, h_out, w_out, h_unroll, w_base, p, q;
+            int t = blockId.x * CUDA_MAX_NUM_THREADS + threadId.x;
+            int b = blockIdx.y;
             int H_out = H - K + 1;
             int W_out = W - K + 1;
+            int W_unroll = H_out * W_out;
 #define x4d(i3, i2, i1, i0) X[(i3) * (C * H * W) + (i2) * (H * W) + (i1) * (W) + i0]
-            for(c = 0; c < C; c++) {
-                w_base = c * (K*K);
+            if(t < C * W_unroll){
+                c = t / W_unroll;
+                s = t % W_unroll;
+                h_out = s / W_out;
+                w_out = s % W_out;
+                h_unroll = h_out * W_out + w_out;
+                w_base = c * K * K;
                 for(p = 0; p < K; p++){
-                    for(q = 0; q < K; q++) {
-                        for (h = 0; h < H_out; h++) {
-                            for (w = 0; w < W_out; w++) {
-                                w_unroll = w_base + p * K + q;
-                                h_unroll = h * W_out + w;
-                                X_unroll[h_unroll * C * K * K + w_unroll] = x4d(b, c, h + p, w + q);
-                            }
-                        }
+                    for(q = 0; q < K; q++){
+                        w_unroll = w_base + p * K + q;
+                        if (h_out + p < H && w_out + q < W && h_unroll < K * K * C && w_unroll < W_unroll)
+                            X_unroll[b * (K * K * C * W_unroll) + h_unroll * W_unroll + w_unroll] = x4d(b, c, h_out + p, w_out + q);
+                        else
+                            X_unroll[b * (K * K * C * W_unroll) + h_unroll * W_unroll + w_unroll] = 0.0;
                     }
                 }
             }
 #undef x4d
         }
+
 /*
    This function is called by new-inl.h
    Any code you write should be executed by this function.
@@ -142,28 +127,35 @@ namespace mxnet
             const int K = w.shape_[3];
             const int H_out = H - K + 1;
             const int W_out = W - K + 1;
+#define k4d(i3, i2, i1, i0) k[(i3) * (C * K * K) + (i2) * (K * K) + (i1) * (K) + i0]
+            float* W_unroll;
+            cudaMalloc(&(W_unroll), sizeof(float) * K * K * C * M);
+            for (int m = 0; m < M; ++m){
+                for (int c = 0; c < C; ++c){
+                    cudaMemcpy( &(W_unroll[m * K * K * C + K * K * c]), &(k4d(m,c,0,0)), K * K * sizeof(float), cudaMemcpyDeviceToDevice);
+                }
+            }
 
-//    int W_unroll = C * K * K;
-//    int H_unroll = H_out * W_out;
-//    float* X_unrolled = (float*) malloc(W_unroll * H_unroll * sizeof(float));
-//    for (int b=0; b < B; b++) {
-//        unroll(C, H, W, K, b, x, X_unrolled);
-////        gemm(H_unroll, M, W_unroll, X_unrolled, W, Y[n]);
-//    }
+            float* X_unroll;
+            cudaMalloc(&(X_unroll), sizeof(float) * H_out * W_out * C * K * K);
+            dim3 blockDim(CUDA_MAX_NUM_THREADS, 1, 1); // FIXME: get cuda_max_num_thread from device query
+            dim3 gridDim(ceil(C * H_out * W_out / (float) CUDA_MAX_NUM_THREADS), B, 1);
+            unroll_Kernel<<<gridDim, blockDim>>>(C, H, W, K, x.dptr_, X_unroll);
             // Set the kernel dimensions
-            int W_grid = ceil(W_out/(float)TILE_WIDTH);
-            int H_grid = ceil(H_out/(float)TILE_WIDTH);
-            int Z = H_grid*W_grid;
-
-            dim3 blockDim(TILE_WIDTH, TILE_WIDTH, 1);
-            dim3 gridDim(B, M, Z);
-            // share mem size
-            size_t shmem_size = sizeof(float) * ( (TILE_WIDTH + K-1)*(TILE_WIDTH + K-1) + K*K );
+//            int W_grid = ceil(W_out/(float)TILE_WIDTH);
+//            int H_grid = ceil(H_out/(float)TILE_WIDTH);
+//            int Z = H_grid*W_grid;
+//
+//            dim3 blockDim(TILE_WIDTH, TILE_WIDTH, 1);
+//            dim3 gridDim(B, M, Z);
+//            // share mem size
+//            size_t shmem_size = sizeof(float) * ( (TILE_WIDTH + K-1)*(TILE_WIDTH + K-1) + K*K );
             // Call the kernel
-            forward_kernel_shared<<<gridDim, blockDim, shmem_size>>>(y.dptr_,x.dptr_,w.dptr_, B,M,C,H,W,K);
+//            forward_kernel_shared<<<gridDim, blockDim, shmem_size>>>(y.dptr_,x.dptr_,w.dptr_, B,M,C,H,W,K);
             // printf("%d", W_out);
             // Use MSHADOW_CUDA_CALL to check for CUDA runtime errors.
             MSHADOW_CUDA_CALL(cudaDeviceSynchronize());
+#undef k4d
 
         }
 
