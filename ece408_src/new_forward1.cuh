@@ -132,7 +132,13 @@ namespace mxnet
             cudaMalloc(&(W_unroll), sizeof(float) * K * K * C * M);
             for (int m = 0; m < M; ++m){
                 for (int c = 0; c < C; ++c){
-                    cudaMemcpy( &(W_unroll[m * K * K * C + K * K * c]), &(k4d(m,c,0,0)), K * K * sizeof(float), cudaMemcpyDeviceToDevice);
+                    for (int p = 0; p < K; ++p){
+                        for (int q = 0; q < K; ++q){
+                            int k = p*K + q;
+                            W_unroll[m * K * K * C + K * K * c + k] = k4d(m,c,p,q);
+                        }
+                    }
+                    // cudaMemcpy( &(W_unroll[m * K * K * C + K * K * c]), &(k4d(m,c,0,0)), K * K * sizeof(float), cudaMemcpyDeviceToDevice);
                 }
             }
 
