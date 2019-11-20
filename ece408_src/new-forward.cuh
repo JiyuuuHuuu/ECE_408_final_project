@@ -13,6 +13,11 @@ namespace mxnet
 namespace op
 {
 
+/* kernel size is arbitrary but is memcpy with sizeof(float)*M*C*K*K in dispatcher 
+ * compiler complains when trying to malloc kernel
+ */
+__constant__ float kernel[7500];
+
 __global__ void forward_kernel(float *y, const float *x, const float *k, const int B, const int M, const int C, const int H, const int W, const int K)
 {
 
@@ -44,6 +49,7 @@ __global__ void forward_kernel(float *y, const float *x, const float *k, const i
 #define y4d(i3, i2, i1, i0) y[(i3) * (M * H_out * W_out) + (i2) * (H_out * W_out) + (i1) * (W_out) + i0]
 #define x4d(i3, i2, i1, i0) x[(i3) * (C * H * W) + (i2) * (H * W) + (i1) * (W) + i0]
 #define k4d(i3, i2, i1, i0) k[(i3) * (C * K * K) + (i2) * (K * K) + (i1) * (K) + i0]
+#define kernel4d(i3, i2, i1, i0) kernel[(i3) * (C * K * K) + (i2) * (K * K) + (i1) * (K) + i0]
 
     if (h < H_out && w < W_out)
     {
@@ -57,13 +63,15 @@ __global__ void forward_kernel(float *y, const float *x, const float *k, const i
                     for (int q = 0; q < K; q++)
                     {
                         if (h + p < H && w + q < W)
-                            acc += x4d(b, c, h + p, w + q)*k4d(m, c, p, q);
+                            acc += x4d(b, c, h + p, w + q)*kernel4d(m, c, p, q);
                     }
                 }
             }
             y4d(b, m, h, w) = acc;
         }
     }
+
+    __syncthreads();
 
 
 #undef y4d
@@ -86,12 +94,12 @@ void forward<gpu, float>(mshadow::Tensor<gpu, 4, float> &y, const mshadow::Tenso
 
     // Extract the tensor dimensions into B,M,C,H,W,K
     // ...
-    const int B = x.shape_[0];
-    const int M = y.shape_[1];
-    const int C = x.shape_[1];
-    const int H = x.shape_[2];
-    const int W = x.shape_[3];
-    const int K = w.shape_[3];
+    const int B = x.shape_[0]; // 
+    const int M = y.shape_[1]; // output feature maps 
+    const int C = x.shape_[1]; // 
+    const int H = x.shape_[2]; // height input
+    const int W = x.shape_[3]; // width input
+    const int K = w.shape_[3]; // height&width of filter bank
     const int H_out = H - K + 1;
     const int W_out = W - K + 1;
 
@@ -109,9 +117,12 @@ void forward<gpu, float>(mshadow::Tensor<gpu, 4, float> &y, const mshadow::Tenso
     // dim3 gridDim(0);
     // dim3 blockDim(0);
 
+    /* allocation like this here leads to compiler errors */
+    //cudaMalloc((void**)&kernel, sizeof(float)* M * C * K * K);
+    cudaMemcpyToSymbol(kernel, w.dptr_, sizeof(float)*M*C*K*K);
     // Call the kernel
     forward_kernel<<<gridDim, blockDim>>>(y.dptr_,x.dptr_,w.dptr_, B,M,C,H,W,K);
-    // printf("%d", W_out);
+    // printf("%d", sdsdW_out);
     // Use MSHADOW_CUDA_CALL to check for CUDA runtime errors.
     MSHADOW_CUDA_CALL(cudaDeviceSynchronize());
 
@@ -130,3 +141,4 @@ void forward(mshadow::Tensor<gpu, 4, DType> &y, const mshadow::Tensor<gpu, 4, DT
 }
 
 #endif
+
