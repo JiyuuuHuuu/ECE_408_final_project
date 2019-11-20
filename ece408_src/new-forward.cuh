@@ -43,15 +43,14 @@ namespace mxnet
         __global__ void matrixMultiplyShared(float *A, float *B, float *C,
                                      int numARows, int numAColumns,
                                      int numBRows, int numBColumns,
-                                     int numCRows, int numCColumns) {
+                                     int numCRows, int numCColumns, int numBatch) {
           //@@ Insert code to implement matrix multiplication here
           //@@ You have to use shared memory for this MP
-          __shared__ float tileA[8][8];
-          __shared__ float tileB[8][8];
+          __shared__ float tileA[TILE_WIDTH][TILE_WIDTH];
+          __shared__ float tileB[TILE_WIDTH][TILE_WIDTH];
 
           int bx = blockIdx.x;
           int by = blockIdx.y;
-          int b = blockIdx.z;
           int tx = threadIdx.x;
           int ty = threadIdx.y;
 
@@ -59,30 +58,32 @@ namespace mxnet
           int y = by*blockDim.y + ty;
           float ret = 0.0;
 
-          for (int i = 0; i < ceil(numAColumns/8.0); i++){
-            if(x < numCColumns && i*blockDim.y + ty < numAColumns){
-              tileB[ty][tx] = B[b*numBRows*numBColumns + (i*blockDim.y + ty)*numBColumns + x];
-            }
-            else{
-              tileB[ty][tx] = 0;
-            }
-            if(y < numCRows && i*blockDim.x + tx < numAColumns){
-              tileA[ty][tx] = A[y*numAColumns + i*blockDim.x + tx];
-            }
-            else{
-              tileA[ty][tx] = 0;
-            }
-            __syncthreads();
+          for (int b = 0; b < numBatch; b++){
+              for (int i = 0; i < ceil(numAColumns/(float)TILE_WIDTH); i++){
+                if(x < numCColumns && i*blockDim.y + ty < numAColumns){
+                  tileB[ty][tx] = B[b*numBRows*numBColumns + (i*blockDim.y + ty)*numBColumns + x];
+                }
+                else{
+                  tileB[ty][tx] = 0;
+                }
+                if(y < numCRows && i*blockDim.x + tx < numAColumns){
+                  tileA[ty][tx] = A[y*numAColumns + i*blockDim.x + tx];
+                }
+                else{
+                  tileA[ty][tx] = 0;
+                }
+                __syncthreads();
 
-            if(x < numCColumns && y < numCRows){
-              for(int q = 0; q < blockDim.x; q++){
-                ret += tileA[ty][q]*tileB[q][tx];
+                if(x < numCColumns && y < numCRows){
+                  for(int q = 0; q < blockDim.x; q++){
+                    ret += tileA[ty][q]*tileB[q][tx];
+                  }
+                }
+                __syncthreads();
               }
-            }
-            __syncthreads();
+              if(x < numCColumns && y < numCRows)
+                C[b*numCRows*numCColumns + y*numCColumns + x] = ret;
           }
-          if(x < numCColumns && y < numCRows)
-            C[b*numCRows*numCColumns + y*numCColumns + x] = ret;
         }
 
 /*
@@ -121,6 +122,7 @@ namespace mxnet
             dim3 blockDim(CUDA_MAX_NUM_THREADS, 1, 1); // FIXME: get cuda_max_num_thread from device query
             dim3 gridDim(ceil(C * H_out * W_out / (float) CUDA_MAX_NUM_THREADS), B, 1);
             unroll_Kernel<<<gridDim, blockDim>>>(C, H, W, K, x.dptr_, X_unroll);
+            MSHADOW_CUDA_CALL(cudaDeviceSynchronize());
 
             // matrix multiplication
             int numARows = M;
@@ -129,13 +131,16 @@ namespace mxnet
             int numBColumns = H_out*W_out;
             int numCRows = numARows;
             int numCColumns = numBColumns;
-            float* deviceC = (float*)malloc(B*numCRows*numCColumns*sizeof(float));
+            float* deviceC;
+            cudaMalloc((void**) &deviceC, B*numCRows*numCColumns*sizeof(float));
             //float* HostUnroll = (float *)malloc(numARows*numBColumns*sizeof(float));
-            dim3 DimGrid(ceil(numCColumns/8.0), ceil(numCRows/8.0), 1);
-            dim3 DimBlock(8, 8, 1);
+            dim3 DimGrid(ceil(numCColumns/(float)TILE_WIDTH), ceil(numCRows/(float)TILE_WIDTH), 1);
+            dim3 DimBlock(TILE_WIDTH, TILE_WIDTH, 1);
             matrixMultiplyShared<<<DimGrid, DimBlock>>>(W_unroll, X_unroll, deviceC,
                                         numARows, numAColumns, numBRows,
-                                        numBColumns, numCRows, numCColumns);
+                                        numBColumns, numCRows, numCColumns, B);
+
+            cudaMemcpy(y.dptr_, deviceC, B*numCRows*numCColumns*sizeof(float), cudaMemcpyDeviceToHost);
             // Set the kernel dimensions
 //            int W_grid = ceil(W_out/(float)TILE_WIDTH);
 //            int H_grid = ceil(H_out/(float)TILE_WIDTH);
