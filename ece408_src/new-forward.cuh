@@ -114,14 +114,14 @@ namespace mxnet
             cudaMalloc(&(W_unroll), sizeof(float) * K * K * C * M);
             for (int m = 0; m < M; ++m){
                 for (int c = 0; c < C; ++c){
-                    cudaMemcpy( &(W_unroll[m * K * K * C + K * K * c]), &(w.dptr_[(m) * (C * K * K) + (c) * (K * K)]), K * K * sizeof(float), cudaMemcpyDeviceToDevice); // FIXME: error: taking address of temporary
+                    cudaMemcpy( &(W_unroll[m * K * K * C + K * K * c]), &(w.dptr_[(m) * (C * K * K) + (c) * (K * K)]), K * K * sizeof(float), cudaMemcpyDeviceToDevice);
                 }
             }
             float* X_unroll;
-            cudaMalloc(&(X_unroll), sizeof(float) * H_out * W_out * C * K * K);
+            cudaMalloc(&(X_unroll), sizeof(float) * H_out * W_out * C * K * K * B);
             dim3 blockDim(CUDA_MAX_NUM_THREADS, 1, 1); // FIXME: get cuda_max_num_thread from device query
             dim3 gridDim(ceil(C * H_out * W_out / (float) CUDA_MAX_NUM_THREADS), B, 1);
-            unroll_Kernel<<<gridDim, blockDim>>>(C, H, W, K, x.dptr_, X_unroll);
+//            unroll_Kernel<<<gridDim, blockDim>>>(C, H, W, K, x.dptr_, X_unroll);
             MSHADOW_CUDA_CALL(cudaDeviceSynchronize());
 
             // matrix multiplication
@@ -140,7 +140,7 @@ namespace mxnet
                                         numARows, numAColumns, numBRows,
                                         numBColumns, numCRows, numCColumns, B);
 
-            cudaMemcpy(y.dptr_, deviceC, B*numCRows*numCColumns*sizeof(float), cudaMemcpyDeviceToHost);
+            cudaMemcpy(y.dptr_, deviceC, B*numCRows*numCColumns*sizeof(float), cudaMemcpyDeviceToHost); // Fixme
             // Set the kernel dimensions
 //            int W_grid = ceil(W_out/(float)TILE_WIDTH);
 //            int H_grid = ceil(H_out/(float)TILE_WIDTH);
