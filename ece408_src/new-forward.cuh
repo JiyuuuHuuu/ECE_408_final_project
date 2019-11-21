@@ -140,7 +140,7 @@ namespace mxnet
             const int K = w.shape_[3];
             const int H_out = H - K + 1;
             const int W_out = W - K + 1;
-//            printf("B = %d, M = %d, C = %d, H = %d, W = %d, K = %d", B, M, C, H, W, K);
+            printf("B = %d, M = %d, C = %d, H = %d, W = %d, K = %d", B, M, C, H, W, K);
 #define k4d_dptr(i3, i2, i1, i0) w.dptr_[(i3) * (C * K * K) + (i2) * (K * K) + (i1) * (K) + i0]
 //            float* W_unroll;
 //            cudaMalloc(&(W_unroll), sizeof(float) * K * K * C * M);
