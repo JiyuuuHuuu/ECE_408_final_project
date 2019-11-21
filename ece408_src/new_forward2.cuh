@@ -1,9 +1,8 @@
-
+/* shared memory convolution */
 #ifndef MXNET_OPERATOR_NEW_FORWARD_CUH_
 #define MXNET_OPERATOR_NEW_FORWARD_CUH_
 #include <math.h>
 #define TILE_WIDTH 16
-#define CUDA_MAX_NUM_THREADS 1024
 
 #include <mxnet/base.h>
 #include <stdio.h>

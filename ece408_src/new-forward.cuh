@@ -1,4 +1,4 @@
-
+/* unroll and matrix multiplication optimization */
 #ifndef MXNET_OPERATOR_NEW_FORWARD_CUH_
 #define MXNET_OPERATOR_NEW_FORWARD_CUH_
 #include <math.h>
@@ -33,7 +33,7 @@ namespace mxnet
                     for(q = 0; q < K; q++){
                         h_unroll = w_base + p * K + q;
 //                        if (h_out + p < H && w_out + q < W && h_unroll < K * K * C && w_unroll < W_unroll) // Fixme: unnecessary ?
-                            X_unroll[b * (K * K * C * W_unroll) + h_unroll * W_unroll + w_unroll] = x4d(b, c, h_out + p, w_out + q);
+                        X_unroll[b * (K * K * C * W_unroll) + h_unroll * W_unroll + w_unroll] = x4d(b, c, h_out + p, w_out + q);
 //                        else
 //                            X_unroll[b * (K * K * C * W_unroll) + h_unroll * W_unroll + w_unroll] = 0.0;  // Fixme: unnecessary ?
                     }
@@ -41,7 +41,7 @@ namespace mxnet
             }
 #undef x4d
         }
-        __global__ void matrixMultiplyShared2(float *A, float *B, float *C,
+        __global__ void matrixMultiplyShared(float *A, float *B, float *C,
                                              int numARows, int numAColumns,
                                              int numBRows, int numBColumns,
                                              int numCRows, int numCColumns) {
@@ -71,51 +71,6 @@ namespace mxnet
                 if(Row < numCRows && Col < numCColumns) C[b * numCColumns * numCRows + Row*numCColumns+Col] = Pval;
             }
         }
-        __global__ void matrixMultiplyShared(float *A, float *B, float *C,
-                                     int numARows, int numAColumns,
-                                     int numBRows, int numBColumns,
-                                     int numCRows, int numCColumns, int numBatch) {
-          //@@ Insert code to implement matrix multiplication here
-          //@@ You have to use shared memory for this MP
-          __shared__ float tileA[TILE_WIDTH][TILE_WIDTH];
-          __shared__ float tileB[TILE_WIDTH][TILE_WIDTH];
-
-          int bx = blockIdx.x;
-          int by = blockIdx.y;
-          int tx = threadIdx.x;
-          int ty = threadIdx.y;
-
-          int x = bx*blockDim.x + tx;
-          int y = by*blockDim.y + ty;
-          float ret = 0.0;
-
-          for (int b = 0; b < numBatch; b++){
-              for (int i = 0; i < ceil(numAColumns/(float)TILE_WIDTH); i++){
-                if(x < numCColumns && i*blockDim.y + ty < numAColumns){
-                  tileB[ty][tx] = B[b*numBRows*numBColumns + (i*blockDim.y + ty)*numBColumns + x];
-                }
-                else{
-                  tileB[ty][tx] = 0;
-                }
-                if(y < numCRows && i*blockDim.x + tx < numAColumns){
-                  tileA[ty][tx] = A[y*numAColumns + i*blockDim.x + tx];
-                }
-                else{
-                  tileA[ty][tx] = 0;
-                }
-                __syncthreads();
-
-                if(x < numCColumns && y < numCRows){
-                  for(int q = 0; q < blockDim.x; q++){
-                    ret += tileA[ty][q]*tileB[q][tx];
-                  }
-                }
-                __syncthreads();
-              }
-              if(x < numCColumns && y < numCRows)
-                C[b*numCRows*numCColumns + y*numCColumns + x] = ret;
-          }
-        }
 
 /*
    This function is called by new-inl.h
@@ -140,80 +95,59 @@ namespace mxnet
             const int K = w.shape_[3];
             const int H_out = H - K + 1;
             const int W_out = W - K + 1;
-            printf("B = %d, M = %d, C = %d, H = %d, W = %d, K = %d\n", B, M, C, H, W, K);
+//            printf("B = %d, M = %d, C = %d, H = %d, W = %d, K = %d\n", B, M, C, H, W, K);
             size_t freeMem, totalMem;
             cudaSetDevice(0);
             cudaMemGetInfo(&freeMem, &totalMem);
             cudaDeviceProp deviceProp;
             cudaGetDeviceProperties(&deviceProp, 0);
-            printf("total = %zu\n", deviceProp.totalGlobalMem);
-            printf("need = %zu\n", (size_t)(sizeof(float) * H_out * W_out * C * K * K * B));
-            printf("total = %zu\n", totalMem);
-            printf("free = %zu\n", freeMem);
+//            printf("total = %zu\n", deviceProp.totalGlobalMem);
+//            printf("need = %zu\n", (size_t)(sizeof(float) * H_out * W_out * C * K * K * B));
+//            printf("total = %zu\n", totalMem);
+//            printf("free = %zu\n", freeMem);
 #define k4d_dptr(i3, i2, i1, i0) w.dptr_[(i3) * (C * K * K) + (i2) * (K * K) + (i1) * (K) + i0]
             if (freeMem >= (size_t)(sizeof(float) * H_out * W_out * C * K * K * B)){
-                //            float* W_unroll;
-                //            cudaMalloc(&(W_unroll), sizeof(float) * K * K * C * M);
-                //            for (int m = 0; m < M; ++m){
-                //                for (int c = 0; c < C; ++c){
-                //                    cudaMemcpy( &(W_unroll[m * K * K * C + K * K * c]), &(k4d_dptr(m, c, 0, 0)), K * K * sizeof(float), cudaMemcpyDeviceToDevice);
-                //                }
-                //            }
-                //            MSHADOW_CUDA_CALL(cudaDeviceSynchronize());
-                            float* X_unroll;
-                            cudaMalloc(&(X_unroll), sizeof(float) * H_out * W_out * C * K * K * B);
-                            dim3 blockDim(CUDA_MAX_NUM_THREADS, 1, 1); // FIXME: get cuda_max_num_thread from device query
-                            dim3 gridDim(ceil(C * H_out * W_out / (float) CUDA_MAX_NUM_THREADS), B, 1);
-                            unroll_Kernel<<<gridDim, blockDim>>>(C, H, W, K, B, x.dptr_, X_unroll);
-                            MSHADOW_CUDA_CALL(cudaDeviceSynchronize());
+                float* X_unroll;
+                cudaMalloc(&(X_unroll), sizeof(float) * H_out * W_out * C * K * K * B);
+                dim3 blockDim(CUDA_MAX_NUM_THREADS, 1, 1); // FIXME: get cuda_max_num_thread from device query
+                dim3 gridDim(ceil(C * H_out * W_out / (float) CUDA_MAX_NUM_THREADS), B, 1);
+                unroll_Kernel<<<gridDim, blockDim>>>(C, H, W, K, B, x.dptr_, X_unroll);
+                MSHADOW_CUDA_CALL(cudaDeviceSynchronize());
 
-                            // matrix multiplication
-                            int numARows = M;
-                            int numAColumns = K*K*C;
-                            int numBRows = K*K*C;
-                            int numBColumns = H_out*W_out;
-                            int numCRows = numARows;
-                            int numCColumns = numBColumns;
-                //            float* deviceC;
-                //            cudaMalloc((void**) &deviceC, B*numCRows*numCColumns*sizeof(float));
-                            //float* HostUnroll = (float *)malloc(numARows*numBColumns*sizeof(float));
-                            dim3 DimGrid(ceil(numCColumns/(float)TILE_WIDTH), ceil(numCRows/(float)TILE_WIDTH), B);
-                            dim3 DimBlock(TILE_WIDTH, TILE_WIDTH, 1);
-                            matrixMultiplyShared2<<<DimGrid, DimBlock>>>(w.dptr_, X_unroll, y.dptr_,
-                                                        numARows, numAColumns, numBRows,
-                                                        numBColumns, numCRows, numCColumns);
+                // matrix multiplication
+                int numARows = M;
+                int numAColumns = K*K*C;
+                int numBRows = K*K*C;
+                int numBColumns = H_out*W_out;
+                int numCRows = numARows;
+                int numCColumns = numBColumns;
 
-                //            cudaMemcpy(y.dptr_, deviceC, B*numCRows*numCColumns*sizeof(float), cudaMemcpyDeviceToHost);
-                            // Set the kernel dimensions
-                //            int W_grid = ceil(W_out/(float)TILE_WIDTH);
-                //            int H_grid = ceil(H_out/(float)TILE_WIDTH);
-                //            int Z = H_grid*W_grid;
-                //
-                //            dim3 blockDim(TILE_WIDTH, TILE_WIDTH, 1);
-                //            dim3 gridDim(B, M, Z);
-                            // Call the kernel
-                //            forward_kernel_shared<<<gridDim, blockDim, shmem_size>>>(y.dptr_,x.dptr_,w.dptr_, B,M,C,H,W,K);
-                            // Use MSHADOW_CUDA_CALL to check for CUDA runtime errors.
-                            MSHADOW_CUDA_CALL(cudaDeviceSynchronize());
-                            cudaFree(X_unroll);
+                dim3 DimGrid(ceil(numCColumns/(float)TILE_WIDTH), ceil(numCRows/(float)TILE_WIDTH), B);
+                dim3 DimBlock(TILE_WIDTH, TILE_WIDTH, 1);
+                matrixMultiplyShared<<<DimGrid, DimBlock>>>(w.dptr_, X_unroll, y.dptr_,
+                        numARows, numAColumns, numBRows,
+                        numBColumns, numCRows, numCColumns);
+
+                MSHADOW_CUDA_CALL(cudaDeviceSynchronize());
+                cudaFree(X_unroll);
             } else{
                 int B_prime = floor(0.7*(float)freeMem/(float)(sizeof(float) * H_out * W_out * C * K * K));
-                printf("B_prime = %d\n", B_prime);
+//                printf("B_prime = %d\n", B_prime);
                 int B_left = B;
                 float* curr_y = y.dptr_;
                 float* curr_x = x.dptr_;
                 while (B_left > 0){
                     int B_temp = B_left>=B_prime?B_prime:B_left;
-                    printf("B_left = %d\n", B_left);
+//                    printf("B_left = %d\n", B_left);
                     B_left -= B_temp;
-                    printf("B_temp = %d\n", B_temp);
+//                    printf("B_temp = %d\n", B_temp);
                     float* X_unroll;
                     cudaError_t err = cudaMalloc(&(X_unroll), sizeof(float) * H_out * W_out * C * K * K * B_temp);
-                    if (err == cudaErrorMemoryAllocation)
-                        printf("Buuu  ");
-                    if (err == cudaSuccess)
-                        printf("Yay  ");
-                    printf("mallocsize = %zu\n", (size_t)(sizeof(float) * H_out * W_out * C * K * K * B_temp));
+//                    if (err == cudaErrorMemoryAllocation)
+//                        printf("Buuu  ");
+//                    if (err == cudaSuccess)
+//                        printf("Yay  ");
+//                    printf("mallocsize = %zu\n", (size_t)(sizeof(float) * H_out * W_out * C * K * K * B_temp));
                     dim3 blockDim(CUDA_MAX_NUM_THREADS, 1, 1); // FIXME: get cuda_max_num_thread from device query
                     dim3 gridDim(ceil(C * H_out * W_out / (float) CUDA_MAX_NUM_THREADS), B_temp, 1);
                     unroll_Kernel<<<gridDim, blockDim>>>(C, H, W, K, B_temp, curr_x, X_unroll);
@@ -229,16 +163,13 @@ namespace mxnet
                     int numBColumns = H_out*W_out;
                     int numCRows = numARows;
                     int numCColumns = numBColumns;
-        //            float* deviceC;
-        //            cudaMalloc((void**) &deviceC, B*numCRows*numCColumns*sizeof(float));
-                    //float* HostUnroll = (float *)malloc(numARows*numBColumns*sizeof(float));
+
                     dim3 DimGrid(ceil(numCColumns/(float)TILE_WIDTH), ceil(numCRows/(float)TILE_WIDTH), B_temp);
                     dim3 DimBlock(TILE_WIDTH, TILE_WIDTH, 1);
-                    matrixMultiplyShared2<<<DimGrid, DimBlock>>>(w.dptr_, X_unroll, curr_y,
-                                                numARows, numAColumns, numBRows,
-                                                numBColumns, numCRows, numCColumns);
+                    matrixMultiplyShared<<<DimGrid, DimBlock>>>(w.dptr_, X_unroll, curr_y,
+                            numARows, numAColumns, numBRows,
+                            numBColumns, numCRows, numCColumns);
                     MSHADOW_CUDA_CALL(cudaDeviceSynchronize());
-                    // curr_y += B_temp*numCRows*numCColumns;
                     curr_y = &curr_y[B_temp*numCRows*numCColumns];
                     cudaFree(X_unroll);
                 }
