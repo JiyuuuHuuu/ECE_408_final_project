@@ -118,11 +118,11 @@ namespace mxnet
                 }
             }
             float* X_unroll;
-            cudaMalloc(&(X_unroll), sizeof(float) * H_out * W_out * C * K * K);
+            cudaMalloc(&(X_unroll), B * sizeof(float) * H_out * W_out * C * K * K);
             dim3 blockDim(CUDA_MAX_NUM_THREADS, 1, 1); // FIXME: get cuda_max_num_thread from device query
             dim3 gridDim(ceil(C * H_out * W_out / (float) CUDA_MAX_NUM_THREADS), B, 1);
-            unroll_Kernel<<<gridDim, blockDim>>>(C, H, W, K, x.dptr_, X_unroll);
-            MSHADOW_CUDA_CALL(cudaDeviceSynchronize());
+            // unroll_Kernel<<<gridDim, blockDim>>>(C, H, W, K, x.dptr_, X_unroll);
+            // MSHADOW_CUDA_CALL(cudaDeviceSynchronize());
 
             // matrix multiplication
             int numARows = M;
@@ -131,16 +131,17 @@ namespace mxnet
             int numBColumns = H_out*W_out;
             int numCRows = numARows;
             int numCColumns = numBColumns;
-            float* deviceC;
-            cudaMalloc((void**) &deviceC, B*numCRows*numCColumns*sizeof(float));
+            // float* deviceC;
+            // cudaMalloc((void**) &deviceC, B*numCRows*numCColumns*sizeof(float));
             //float* HostUnroll = (float *)malloc(numARows*numBColumns*sizeof(float));
             dim3 DimGrid(ceil(numCColumns/(float)TILE_WIDTH), ceil(numCRows/(float)TILE_WIDTH), 1);
             dim3 DimBlock(TILE_WIDTH, TILE_WIDTH, 1);
-            matrixMultiplyShared<<<DimGrid, DimBlock>>>(W_unroll, X_unroll, deviceC,
+            matrixMultiplyShared<<<DimGrid, DimBlock>>>(W_unroll, X_unroll, y.dptr_,
                                         numARows, numAColumns, numBRows,
                                         numBColumns, numCRows, numCColumns, B);
+            MSHADOW_CUDA_CALL(cudaDeviceSynchronize());
 
-            cudaMemcpy(y.dptr_, deviceC, B*numCRows*numCColumns*sizeof(float), cudaMemcpyDeviceToHost);
+            // cudaMemcpy(y.dptr_, deviceC, B*numCRows*numCColumns*sizeof(float), cudaMemcpyDeviceToHost);
             // Set the kernel dimensions
 //            int W_grid = ceil(W_out/(float)TILE_WIDTH);
 //            int H_grid = ceil(H_out/(float)TILE_WIDTH);
@@ -151,7 +152,6 @@ namespace mxnet
             // Call the kernel
 //            forward_kernel_shared<<<gridDim, blockDim, shmem_size>>>(y.dptr_,x.dptr_,w.dptr_, B,M,C,H,W,K);
             // Use MSHADOW_CUDA_CALL to check for CUDA runtime errors.
-            MSHADOW_CUDA_CALL(cudaDeviceSynchronize());
 #undef k4d
 
         }
