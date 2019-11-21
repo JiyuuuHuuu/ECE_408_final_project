@@ -197,23 +197,30 @@ namespace mxnet
                             MSHADOW_CUDA_CALL(cudaDeviceSynchronize());
                             cudaFree(X_unroll);
             } else{
-                int B_prime = floor(freeMem/(float)(sizeof(float) * H_out * W_out * C * K * K));
+                int B_prime = floor(0.7*(float)freeMem/(float)(sizeof(float) * H_out * W_out * C * K * K));
                 printf("B_prime = %d\n", B_prime);
                 int B_left = B;
                 float* curr_y = y.dptr_;
                 float* curr_x = x.dptr_;
                 while (B_left > 0){
                     int B_temp = B_left>=B_prime?B_prime:B_left;
+                    printf("B_left = %d\n", B_left);
                     B_left -= B_temp;
                     printf("B_temp = %d\n", B_temp);
                     float* X_unroll;
-                    cudaMalloc(&(X_unroll), sizeof(float) * H_out * W_out * C * K * K * B_temp);
+                    cudaError_t err = cudaMalloc(&(X_unroll), sizeof(float) * H_out * W_out * C * K * K * B_temp);
+                    if (err == cudaErrorMemoryAllocation)
+                        printf("Buuu  ");
+                    if (err == cudaSuccess)
+                        printf("Yay  ");
                     printf("mallocsize = %zu\n", (size_t)(sizeof(float) * H_out * W_out * C * K * K * B_temp));
                     dim3 blockDim(CUDA_MAX_NUM_THREADS, 1, 1); // FIXME: get cuda_max_num_thread from device query
                     dim3 gridDim(ceil(C * H_out * W_out / (float) CUDA_MAX_NUM_THREADS), B_temp, 1);
                     unroll_Kernel<<<gridDim, blockDim>>>(C, H, W, K, B_temp, curr_x, X_unroll);
                     MSHADOW_CUDA_CALL(cudaDeviceSynchronize());
-                    curr_x = &curr_x[H_out * W_out * C * K * K * B_temp];
+                    // curr_x += H_out * W_out * C * K * K * B_temp;
+                    curr_x = &curr_x[C * H * W * B_temp];
+                    // printf("curr_x: %f", *curr_x);
 
                     // matrix multiplication
                     int numARows = M;
@@ -231,6 +238,7 @@ namespace mxnet
                                                 numARows, numAColumns, numBRows,
                                                 numBColumns, numCRows, numCColumns);
                     MSHADOW_CUDA_CALL(cudaDeviceSynchronize());
+                    // curr_y += B_temp*numCRows*numCColumns;
                     curr_y = &curr_y[B_temp*numCRows*numCColumns];
                     cudaFree(X_unroll);
                 }
