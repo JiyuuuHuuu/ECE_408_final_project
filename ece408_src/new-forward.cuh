@@ -1,8 +1,8 @@
+/* unroll and matrix multiplication optimization */
 #ifndef MXNET_OPERATOR_NEW_FORWARD_CUH_
 #define MXNET_OPERATOR_NEW_FORWARD_CUH_
 #include <math.h>
-#define TILE_WIDTH 16
-
+#define TILE_WIDTH 32
 
 #include <mxnet/base.h>
 #include <stdio.h>
@@ -11,64 +11,44 @@ namespace mxnet
 {
     namespace op
     {
+        __global__ void matrixMultiplyShared(float *A, float *B, float *Out,
+                                             int numARows, int numAColumns,
+                                             int numBRows, int numBColumns,
+                                             int numCRows, int numCColumns,
+                                             int K, int C, int W, int H, int W_out) {
+            //@@ Insert code to implement matrix multiplication here
+            //@@ You have to use shared memory for this MP
+#define x4d(i3, i2, i1, i0) B[(i3) * (C * H * W) + (i2) * (H * W) + (i1) * (W) + i0]
+            __shared__ float subTileA[TILE_WIDTH][TILE_WIDTH];
+            __shared__ float subTileB[TILE_WIDTH][TILE_WIDTH];
+            int bx = blockIdx.x;
+            int by = blockIdx.y;
+            int tx = threadIdx.x;
+            int ty = threadIdx.y;
+            int Row = by * TILE_WIDTH + ty;
+            int Col = bx * TILE_WIDTH + tx;
 
-        __global__ void forward_kernel(float *y, const float *x, const float *k, const int B, const int M, const int C, const int H, const int W, const int K)
-        {
-
-            /*
-            Modify this function to implement the forward pass described in Chapter 16.
-            We have added an additional dimension to the tensors to support an entire mini-batch
-            The goal here is to be correct AND fast.
-            We have some nice #defs for you below to simplify indexing. Feel free to use them, or create your own.
-            */
-
-
-            const int H_out = H - K + 1;
-            const int W_out = W - K + 1;
-
-            int W_grid = W_out/TILE_WIDTH;
-            if (W_out%TILE_WIDTH != 0)
-                W_grid++;
-
-            // int b = blockIdx.z;
-            int b = blockIdx.x;
-            int m = blockIdx.y;
-            int h = blockIdx.z/W_grid*TILE_WIDTH + threadIdx.y;
-            int w = blockIdx.z%W_grid*TILE_WIDTH + threadIdx.x;
-            // (void)H_out; // silence declared but never referenced warning. remove this line when you start working
-            // (void)W_out; // silence declared but never referenced warning. remove this line when you start working
-
-// An example use of these macros:
-// float a = y4d(0,0,0,0)
-// y4d(0,0,0,0) = a
-#define y4d(i3, i2, i1, i0) y[(i3) * (M * H_out * W_out) + (i2) * (H_out * W_out) + (i1) * (W_out) + i0]
-#define x4d(i3, i2, i1, i0) x[(i3) * (C * H * W) + (i2) * (H * W) + (i1) * (W) + i0]
-#define k4d(i3, i2, i1, i0) k[(i3) * (C * K * K) + (i2) * (K * K) + (i1) * (K) + i0]
-
-            if (h < H_out && w < W_out)
-            {
-//        for (int b = 0; b < B; b++)
-//        {
-                float acc = 0;
-                for (int c = 0; c < C; c++)
-                {
-                    for (int p = 0; p < K; p++)
-                    {
-                        for (int q = 0; q < K; q++)
-                        {
-                            if (h + p < H && w + q < W)
-                                acc += x4d(b, c, h + p, w + q)*k4d(m, c, p, q);
-                        }
+            int b = blockIdx.z;
+            float Pval = 0;
+            for (int m = 0; m < ceil(numAColumns/(TILE_WIDTH*1.0)); ++m){
+                int temp_row = m * TILE_WIDTH + ty;
+                subTileA[ty][tx] = (Row < numCRows  && m*TILE_WIDTH+tx < numAColumns) ? A[Row*numAColumns + m*TILE_WIDTH+tx] : 0;
+                // implicit unrolling
+                int X_b = b;
+                int X_c = temp_row/(K*K);
+                int X_p = (temp_row%(K*K))/K, X_q = (temp_row%(K*K))%K;
+                int X_h = Col/W_out, X_w = Col%W_out;
+                subTileB[ty][tx] = (Col < numBColumns && temp_row < numBRows) ? x4d(X_b, X_c, X_h + X_p, X_w + X_q) : 0;
+                __syncthreads();
+                if(Row < numCRows && Col < numCColumns){
+                    for (int k = 0; k < TILE_WIDTH; k++){
+                        Pval += subTileA[ty][k] * subTileB[k][tx];
                     }
                 }
-                y4d(b, m, h, w) = acc;
-//        }
+                __syncthreads();
+                if(Row < numCRows && Col < numCColumns) Out[b * numCColumns * numCRows + Row*numCColumns+Col] = Pval;
             }
-
-
-#undef y4d
 #undef x4d
-#undef k4d
         }
 
 /*
@@ -94,27 +74,24 @@ namespace mxnet
             const int K = w.shape_[3];
             const int H_out = H - K + 1;
             const int W_out = W - K + 1;
+//            printf("B = %d, M = %d, C = %d, H = %d, W = %d, K = %d\n", B, M, C, H, W, K);
 
-            // Set the kernel dimensions
-            int W_grid = ceil(W_out/(float)TILE_WIDTH);
-            // if (W_out%TILE_WIDTH != 0)
-            //     W_grid++;
-            int H_grid = ceil(H_out/(float)TILE_WIDTH);
-            // if (H_out%TILE_WIDTH != 0)
-            //     H_grid++;
-            int Z = H_grid*W_grid;
+            // matrix multiplication
+            int numARows = M;
+            int numAColumns = K*K*C;
+            int numBRows = K*K*C;
+            int numBColumns = H_out*W_out;
+            int numCRows = numARows;
+            int numCColumns = numBColumns;
 
-            dim3 blockDim(TILE_WIDTH, TILE_WIDTH, 1);
-            dim3 gridDim(B, M, Z);
-            // dim3 gridDim(0);
-            // dim3 blockDim(0);
+            dim3 DimGrid(ceil(numCColumns/(float)TILE_WIDTH), ceil(numCRows/(float)TILE_WIDTH), B);
+            dim3 DimBlock(TILE_WIDTH, TILE_WIDTH, 1);
+            matrixMultiplyShared<<<DimGrid, DimBlock>>>(w.dptr_, x.dptr_, y.dptr_,
+                    numARows, numAColumns, numBRows,
+                    numBColumns, numCRows, numCColumns,
+                    K, C, H, W, W_out);
 
-            // Call the kernel
-            forward_kernel<<<gridDim, blockDim>>>(y.dptr_,x.dptr_,w.dptr_, B,M,C,H,W,K);
-            // printf("%d", W_out);
-            // Use MSHADOW_CUDA_CALL to check for CUDA runtime errors.
             MSHADOW_CUDA_CALL(cudaDeviceSynchronize());
-
         }
 
 /*
