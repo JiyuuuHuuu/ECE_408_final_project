@@ -12,9 +12,9 @@ commands:
   build:
     - /bin/bash -c "cp -rv /ece408_src/* /mxnet/src/operator/custom" # copy golden files to mxnet source tree
     - /bin/bash -c "cp -rv /src/* /build" # copy the project folder to /build so everything appears in the upload
-#    - /bin/bash -c "for src in ece408_src/*; do cp -v $src /mxnet/src/operator/custom/.; done" # copy source files to mxnet tree
-#    - nice -n20 make -C /mxnet # build mxnet
-#    - pip2 install --user -e /mxnet/python   # install python bindings
+    - /bin/bash -c "for src in ece408_src/*; do cp -v $src /mxnet/src/operator/custom/.; done" # copy source files to mxnet tree
+    - nice -n20 make -C /mxnet # build mxnet
+    - pip2 install --user -e /mxnet/python   # install python bindings
 #    - /usr/bin/time python m1.1.py # execute code
 #    - /usr/bin/time python m1.2.py # execute code
 #    - /usr/bin/time python m2.1.py # execute CPU implementation
@@ -24,7 +24,7 @@ commands:
 #    - python m2.1.py 10000 # execute code
 #    - python m4.1.py 100
 #    - python m4.1.py 1000
-#    - python m4.1.py 10000
+    - python final.py
 #    - nvprof --analysis-metrics -o timeline.nvprof python m4.1.py 1000
 #    - nvprof --kernels "::forward:1" --analysis-metrics -o forward1_analysis.nvprof python m4.1.py 1000
 #    - nvprof --kernels "::forward:2" --analysis-metrics -o forward2_analysis.nvprof python m4.1.py 1000
