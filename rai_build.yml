@@ -25,9 +25,9 @@ commands:
 #    - python m4.1.py 100
 #    - python m4.1.py 1000
     - python final.py
-#    - nvprof --analysis-metrics -o timeline.nvprof python m4.1.py 1000
-#    - nvprof --kernels "::forward:1" --analysis-metrics -o forward1_analysis.nvprof python m4.1.py 1000
-#    - nvprof --kernels "::forward:2" --analysis-metrics -o forward2_analysis.nvprof python m4.1.py 1000
+    - nvprof --analysis-metrics -o timeline.nvprof python m4.1.py 1000
+    - nvprof --kernels "::forward:1" --analysis-metrics -o forward1_analysis.nvprof python m4.1.py 1000
+    - nvprof --kernels "::forward:2" --analysis-metrics -o forward2_analysis.nvprof python m4.1.py 1000
 #    - /usr/bin/time python m4.1.py # execute code
 #    - /usr/bin/time python m4.1.py # execute code
 #    - /usr/bin/time python final.py # execute code
