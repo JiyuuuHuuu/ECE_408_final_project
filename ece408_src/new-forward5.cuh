@@ -2,8 +2,8 @@
 #ifndef MXNET_OPERATOR_NEW_FORWARD_CUH_
 #define MXNET_OPERATOR_NEW_FORWARD_CUH_
 #include <math.h>
-#define TILE_WIDTH 32
-#define BATCH_CLUSTER_LENGTH 1
+#define TILE_WIDTH 16
+#define BATCH_CLUSTER_LENGTH 4
 
 #include <mxnet/base.h>
 #include <stdio.h>
