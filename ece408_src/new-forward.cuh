@@ -2,9 +2,10 @@
 #ifndef MXNET_OPERATOR_NEW_FORWARD_CUH_
 #define MXNET_OPERATOR_NEW_FORWARD_CUH_
 #include <math.h>
-#define TILE_WIDTH_L1 32
-#define TILE_WIDTH_L2 32
-#define BATCH_CLUSTER_LENGTH 1
+#define TILE_WIDTH_L1 16
+#define TILE_WIDTH_L2 16
+#define CHANNEL_TILE 4
+#define BATCH_CLUSTER_LENGTH 4
 
 #include <mxnet/base.h>
 #include <stdio.h>
@@ -57,43 +58,47 @@ namespace mxnet
         }
         // Layer 2 no parallel
         __global__ void matrixMultiplyShared_L2(float * __restrict__ A, float * __restrict__ B, float * __restrict__ Out,
-                                             int numARows, int numAColumns,
-                                             int numBRows, int numBColumns,
-                                             int numCRows, int numCColumns,
-                                             int K, int C, int W, int H, int W_out) {
+                                                int numARows, int numAColumns,
+                                                int numBRows, int numBColumns,
+                                                int numCRows, int numCColumns,
+                                                int K, int C, int W, int H, int W_out) {
             //@@ Insert code to implement matrix multiplication here
             //@@ You have to use shared memory for this MP
 #define x4d(i3, i2, i1, i0) B[(i3) * (C * H * W) + (i2) * (H * W) + (i1) * (W) + i0]
-            __shared__ float subTileA[TILE_WIDTH_L2][TILE_WIDTH_L2];
-            __shared__ float subTileB[TILE_WIDTH_L2][TILE_WIDTH_L2];
+#define k4d(i3, i2, i1, i0) A[(i3) * (C * K * K) + (i2) * (K * K) + (i1) * (K) + i0]
+            __shared__ float subTileA[CHANNEL_TILE][TILE_WIDTH_L2][TILE_WIDTH_L2];
+            __shared__ float subTileB[CHANNEL_TILE][TILE_WIDTH_L2][TILE_WIDTH_L2];
             int bx = blockIdx.x;
             int by = blockIdx.y;
             int tx = threadIdx.x;
             int ty = threadIdx.y;
+            int tz = threadIdx.z;
             int Row = by * TILE_WIDTH_L2 + ty;
             int Col = bx * TILE_WIDTH_L2 + tx;
 
-            int b = blockIdx.z;
+            int bz = blockIdx.z % CHANNEL_TILE;
+            int b = blockIdx.z / CHANNEL_TILE; // % 4, / 4
+            int Channel = tz + bz * CHANNEL_TILE;
             float Pval = 0;
 #pragma unroll
-            for (int m = 0; m < ceil(25*12/(TILE_WIDTH_L2*1.0)); ++m){
+            for (int m = 0; m < ceil(25/(TILE_WIDTH_L2*1.0)); ++m){ // m < ceil(25/12*(TILE_WIDTH_L2*1.0))
                 int temp_row = m * TILE_WIDTH_L2 + ty;
-                subTileA[ty][tx] = (Row < numCRows  && m*TILE_WIDTH_L2+tx < numAColumns) ? A[Row*numAColumns + m*TILE_WIDTH_L2+tx] : 0;
+                subTileA[tz][ty][tx] = (Row < numCRows  && m*TILE_WIDTH_L2+tx < numAColumns && Channel < C) ? k4d(Row, Channel, ((m*TILE_WIDTH_L2+tx)%Channel)/K, ((m*TILE_WIDTH_L2+tx)%Channel)%K) : 0;
                 // implicit unrolling
                 int X_b = b;
-                int X_c = temp_row/(K*K);
-                int X_p = (temp_row%(K*K))/K, X_q = (temp_row%(K*K))%K;
+                int X_c = Channel;
+                int X_p = (temp_row%(Channel))/K, X_q = (temp_row%(Channel))%K;
                 int X_h = Col/W_out, X_w = Col%W_out;
-                subTileB[ty][tx] = (Col < numBColumns && temp_row < numBRows) ? x4d(X_b, X_c, X_h + X_p, X_w + X_q) : 0;
+                subTileB[tz][ty][tx] = (Col < numBColumns && temp_row < numBRows) ? x4d(X_b, X_c, X_h + X_p, X_w + X_q) : 0;
                 __syncthreads();
                 if(Row < numCRows && Col < numCColumns){
 #pragma unroll
                     for (int k = 0; k < TILE_WIDTH_L2; k++){
-                        Pval += subTileA[ty][k] * subTileB[k][tx];
+                        Pval += subTileA[tz][ty][k] * subTileB[tz][k][tx];
                     }
                 }
                 __syncthreads();
-                if(Row < numCRows && Col < numCColumns) Out[b * numCColumns * numCRows + Row*numCColumns+Col] = Pval;
+                if(Row < numCRows && Col < numCColumns) atomicAdd(&Out[b * numCColumns * numCRows + Row*numCColumns+Col], Pval);
             }
 #undef x4d
         }
@@ -211,7 +216,7 @@ namespace mxnet
 
             // matrix multiplication
             int numARows = M;
-            int numAColumns = K*K*C;
+            int numAColumns = K*K*C;32
             int numBRows = K*K*C;
             int numBColumns = H_out*W_out;
             int numCRows = numARows;
@@ -226,8 +231,8 @@ namespace mxnet
                         K, C, H, W, W_out, B);
             }else{
                 // Layer 2
-                dim3 DimGrid(ceil(numCColumns/(float)TILE_WIDTH_L2), ceil(numCRows/(float)TILE_WIDTH_L2), B);
-                dim3 DimBlock(TILE_WIDTH_L2, TILE_WIDTH_L2, 1);
+                dim3 DimGrid(ceil(numCColumns/(float)TILE_WIDTH_L2), ceil(numCRows/(float)TILE_WIDTH_L2), B * ceil(C/(float)CHANNEL_TILE));
+                dim3 DimBlock(TILE_WIDTH_L2, TILE_WIDTH_L2, CHANNEL_TILE);
                 matrixMultiplyShared_L2<<<DimGrid, DimBlock>>>(w.dptr_, x.dptr_, y.dptr_,
                         numARows, numAColumns, numBRows,
                         numBColumns, numCRows, numCColumns,
