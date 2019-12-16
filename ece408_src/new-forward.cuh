@@ -76,9 +76,9 @@ namespace mxnet
             int Row = by * TILE_WIDTH_L2 + ty;
             int Col = bx * TILE_WIDTH_L2 + tx;
 
-            int bz = blockIdx.z % CHANNEL_TILE;
+            int bz = blockIdx.z / CHANNEL_TILE;
             int b = blockIdx.z / CHANNEL_TILE; // % 4, / 4
-            int Channel = tz + bz * CHANNEL_TILE;
+            int Channel = tz % 4 + bz * CHANNEL_TILE;
             float Pval = 0;
 #pragma unroll
             for (int m = 0; m < ceil(25/(TILE_WIDTH_L2*1.0)); ++m){ // m < ceil(25/12*(TILE_WIDTH_L2*1.0))
@@ -89,7 +89,7 @@ namespace mxnet
                 int X_c = Channel;
                 int X_p = (temp_row%(Channel))/K, X_q = (temp_row%(Channel))%K;
                 int X_h = Col/W_out, X_w = Col%W_out;
-                subTileB[tz][ty][tx] = (Col < numBColumns && temp_row < numBRows) ? x4d(X_b, X_c, X_h + X_p, X_w + X_q) : 0;
+                subTileB[tz][ty][tx] = (Col < numBColumns && temp_row < numBRows && Channel < C) ? x4d(X_b, X_c, X_h + X_p, X_w + X_q) : 0;
                 __syncthreads();
                 if(Row < numCRows && Col < numCColumns){
 #pragma unroll
@@ -216,7 +216,7 @@ namespace mxnet
 
             // matrix multiplication
             int numARows = M;
-            int numAColumns = K*K*C;32
+            int numAColumns = K*K*C;
             int numBRows = K*K*C;
             int numBColumns = H_out*W_out;
             int numCRows = numARows;
@@ -233,6 +233,7 @@ namespace mxnet
                 // Layer 2
                 dim3 DimGrid(ceil(numCColumns/(float)TILE_WIDTH_L2), ceil(numCRows/(float)TILE_WIDTH_L2), B * ceil(C/(float)CHANNEL_TILE));
                 dim3 DimBlock(TILE_WIDTH_L2, TILE_WIDTH_L2, CHANNEL_TILE);
+                cudaMemset(y.dptr_, 0, sizeof(float)* M * H_out * W_out);
                 matrixMultiplyShared_L2<<<DimGrid, DimBlock>>>(w.dptr_, x.dptr_, y.dptr_,
                         numARows, numAColumns, numBRows,
                         numBColumns, numCRows, numCColumns,
