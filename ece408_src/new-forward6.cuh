@@ -14,7 +14,7 @@ namespace mxnet
     namespace op
     {
         // Layer 1 no parallel
-        __global__ void matrixMultiplyShared_L1(float * __restrict__ A, float * __restrict__ B, float * __restrict__ Out,
+        __global__ void matrixMultiplyShared_L1(const float * __restrict__ A, const float * __restrict__ B, float * __restrict__ Out,
                                                 int numARows, int numAColumns,
                                                 int numBRows, int numBColumns,
                                                 int numCRows, int numCColumns,
@@ -56,7 +56,7 @@ namespace mxnet
 #undef x4d
         }
         // Layer 2 no parallel
-        __global__ void matrixMultiplyShared_L2(float * __restrict__ A, float * __restrict__ B, float * __restrict__ Out,
+        __global__ void matrixMultiplyShared_L2(const float * __restrict__ A, const float * __restrict__ B, float * __restrict__ Out,
                                                 int numARows, int numAColumns,
                                                 int numBRows, int numBColumns,
                                                 int numCRows, int numCColumns,
@@ -98,7 +98,7 @@ namespace mxnet
 #undef x4d
         }
         // Layer 1 parallel
-        __global__ void matrixMultiplyShared_parallel_L1(float * __restrict__ A, float * __restrict__ B, float * __restrict__ Out,
+        __global__ void matrixMultiplyShared_parallel_L1(const float * __restrict__ A, const float * __restrict__ B, float * __restrict__ Out,
                                                          int numARows, int numAColumns,
                                                          int numBRows, int numBColumns,
                                                          int numCRows, int numCColumns,
@@ -141,7 +141,7 @@ namespace mxnet
 #undef x4d
         }
         // Layer 2 parallel
-        __global__ void matrixMultiplyShared_parallel_L2(float * __restrict__ A, float * __restrict__ B, float * __restrict__ Out,
+        __global__ void matrixMultiplyShared_parallel_L2(const float * __restrict__ A, const float * __restrict__ B, float * __restrict__ Out,
                                                          int numARows, int numAColumns,
                                                          int numBRows, int numBColumns,
                                                          int numCRows, int numCColumns,
